@@ -1,43 +1,76 @@
 import os
 import shutil
 import tempfile
+import json
 from typing import List, Optional
-from image_url import upload_image_to_cloudinary, delete_image, delete_images_by_tag, list_images_by_tag
+from image_url import upload_image_to_cloudinary
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import uvicorn
+import datetime
 
-app = FastAPI(
-    title="Cloudinary Image Management API (Modularized)",
-    description="API for uploading, deleting, and listing images on Cloudinary, using functions from image_url.py."
-)
+app = FastAPI()
 
-# --- API Endpoints ---
+PUBLIC_IMAGES_DIR = "public_images"
+IMAGE_METADATA_DIR = "image_metadata" 
+
+def save_image_metadata(filename: str, public_id: str, url: str, original_filename: str):
+
+    os.makedirs(IMAGE_METADATA_DIR, exist_ok=True) # Ensure metadata directory exists
+    metadata_filename = f"{os.path.splitext(filename)[0]}.json" # Use the timestamped filename base
+    metadata_path = os.path.join(IMAGE_METADATA_DIR, metadata_filename)
+
+    metadata_content = {
+        "public_id": public_id,
+        "url": url,
+        "upload_time": datetime.datetime.now().isoformat(),
+        "original_filename": original_filename
+    }
+
+    with open(metadata_path, "w") as f:
+        json.dump(metadata_content, f, indent=4)
+    print(f"Metadata saved to: {metadata_path}")
+
+
 
 @app.get("/")
 async def read_root():
-    return {"message": "Welcome to the Cloudinary Image API. Visit /docs for API documentation."}
+    return {"message": "Welcome to the Image URL Convertor API. Visit /docs for API documentation."}
 
 @app.post("/upload-image/")
 async def upload_image_endpoint(
     file: UploadFile = File(...),
 ):
-    temp_file_path = None
+    local_file_path = None
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=f"_{file.filename}") as temp_file:
-            shutil.copyfileobj(file.file, temp_file)
-            temp_file_path = temp_file.name
 
-        print(f"Temporarily saved uploaded file to: {temp_file_path}")
+        os.makedirs(PUBLIC_IMAGES_DIR, exist_ok=True)
 
-        uploaded_url, public_id = upload_image_to_cloudinary(temp_file_path) # Call function from image_url.py
+        current_time = datetime.datetime.now().strftime("%Y%m%d%H%M%S%f")
+        original_filename = file.filename
+
+        new_filename_with_ext = f"{current_time}_{original_filename}"
+        local_file_path = os.path.join(PUBLIC_IMAGES_DIR, new_filename_with_ext)
+
+
+        with open(local_file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        print(f"Locally saved uploaded file to: {local_file_path}")
+
+        uploaded_url, public_id = upload_image_to_cloudinary(local_file_path) 
 
         if uploaded_url and public_id:
+
+            save_image_metadata(new_filename_with_ext, public_id, uploaded_url, original_filename)
+
             return JSONResponse(status_code=200, content={
                 "message": "Image uploaded successfully",
                 "url": uploaded_url,
                 "public_id": public_id,
+                "local_path": local_file_path,
+                "metadata_saved": True
             })
         else:
             raise HTTPException(status_code=500, detail="Cloudinary upload failed: Check server logs for details.")
@@ -47,43 +80,10 @@ async def upload_image_endpoint(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"An unexpected error occurred during upload: {str(e)}")
     finally:
-        if temp_file_path and os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
-            print(f"Cleaned up temporary file: {temp_file_path}")
-
-
-@app.delete("/delete-image/{public_id}")
-async def delete_image_endpoint(public_id: str):
-    try:
-        success = delete_image(public_id) # Call function from image_url.py
-        if success:
-            return JSONResponse(status_code=200, content={"message": f"Image '{public_id}' deleted successfully."})
-        else:
-            raise HTTPException(status_code=404, detail=f"Image '{public_id}' not found or could not be deleted.")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete image: {str(e)}")
-
-@app.delete("/delete-by-tag/{tag_name}")
-async def delete_by_tag_endpoint(tag_name: str):
-    try:
-        success = delete_images_by_tag(tag_name) # Call function from image_url.py
-        if success:
-            return JSONResponse(status_code=200, content={"message": f"Deletion command sent for images tagged '{tag_name}'."})
-        else:
-            raise HTTPException(status_code=500, detail=f"Failed to initiate deletion for tag '{tag_name}'.")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete images by tag: {str(e)}")
-
-@app.get("/list-by-tag/{tag_name}")
-async def list_by_tag_endpoint(tag_name: str):
-    try:
-        image_urls = list_images_by_tag(tag_name) # Call function from image_url.py
-        if image_urls:
-            return JSONResponse(status_code=200, content={"tag": tag_name, "image_urls": image_urls, "count": len(image_urls)})
-        else:
-            return JSONResponse(status_code=200, content={"tag": tag_name, "image_urls": [], "message": "No images found with this tag."})
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list images by tag: {str(e)}")
+        # The finally block will always clean up the local image file after processing.
+        if local_file_path and os.path.exists(local_file_path):
+            os.remove(local_file_path)
+            print(f"Cleaned up local image file: {local_file_path}")
 
 
 if __name__ == "__main__":
