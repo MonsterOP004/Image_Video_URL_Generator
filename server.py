@@ -6,11 +6,21 @@ from typing import List, Optional
 from image_url import upload_image_to_cloudinary
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware # Added import
 from pydantic import BaseModel
 import uvicorn
 import datetime
 
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+)
 
 PUBLIC_IMAGES_DIR = "public_images"
 IMAGE_METADATA_DIR = "image_metadata" 
